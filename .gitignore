@@ -1,3 +1,5 @@
 .env
 Output
 google_credentials.json
+insuranceCardImages
+credentials.json
