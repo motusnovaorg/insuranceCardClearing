@@ -118,6 +118,31 @@ def auto_rotate_image(image_path):
         # Image doesn't have EXIF data
         pass
 
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+import datetime
+
+def log_to_google_sheet(first_name, last_name, link):
+    sheet_id = os.getenv("WORKBOOK_ID")
+    sheet_name = os.getenv("SHEET_NAME")
+
+    creds = service_account.Credentials.from_service_account_file('credentials.json', scopes=['https://www.googleapis.com/auth/spreadsheets'])
+    service = build('sheets', 'v4', credentials=creds)
+    sheet = service.spreadsheets()
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    row = [[timestamp, first_name, last_name, link]]
+
+    request = sheet.values().append(
+        spreadsheetId=sheet_id,
+        range=f"{sheet_name}!A:D",
+        valueInputOption="USER_ENTERED",
+        insertDataOption="INSERT_ROWS",
+        body={"values": row}
+    )
+    request.execute()
+
 def process_insurance_cards(images_folder):
     openai_client = make_open_ai_client(OPENAI_API_KEY)
 
@@ -126,32 +151,28 @@ def process_insurance_cards(images_folder):
     front_image_path = os.path.join(images_folder, all_images[0])
     back_image_path = os.path.join(images_folder, all_images[1])
 
-    # 🛠 Auto-rotate both images
     auto_rotate_image(front_image_path)
     auto_rotate_image(back_image_path)
 
-    # OCR only the front image
     front_text = quickstart(project_id, location, processor_display_name, front_image_path)
 
-    # Analyze to extract patient info
     analysis = analyze_all(front_text, openai_client, 500)
     info = convert_to_dictionary(analysis)
 
-    # Clean patient names
     first_name = info.get('Patient First Name', 'Friend').strip().capitalize()
     last_name = info.get('Patient Last Name', 'Unknown').strip().capitalize()
 
-    # ✨ Combine into one full name
     full_name = f"{first_name} {last_name}"
 
-    # Create output PDF
     pdf_filename = f"{first_name}{last_name}InsuranceCard.pdf"
     pdf_path = os.path.join(images_folder, pdf_filename)
+
     convert_img_to_pdf(images_folder, pdf_path)
 
-    # Upload to Drive
     drive_service = authenticate_services()
     link = upload_file_to_drive(drive_service, pdf_path, pdf_filename, FOLDER_ID)
 
-    # 🚀 FINAL RETURN
+    # ✨ Log to Google Sheets here
+    log_to_google_sheet(first_name, last_name, link)
+
     return link, full_name

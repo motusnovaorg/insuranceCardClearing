@@ -25,24 +25,33 @@
 
         .dropzone {
             width: 300px;
-            height: 180px;
+            height: 200px;
             border: 2px dashed #aaa;
             border-radius: 12px;
-            display: inline-flex;
+            background-color: #fff;
+            margin: 10px;
+            display: flex;
             align-items: center;
             justify-content: center;
-            margin: 10px;
-            font-size: 1em;
+            flex-direction: column;
             color: #777;
+            font-size: 1em;
             cursor: pointer;
-            background-color: #fff;
-            transition: background-color 0.3s, border-color 0.3s;
+            position: relative;
+            transition: all 0.3s ease;
         }
 
         .dropzone.dragover {
             background-color: #e0f7fa;
             border-color: #00acc1;
             color: #007c91;
+        }
+
+        .dropzone img.preview {
+            max-width: 90%;
+            max-height: 140px;
+            border-radius: 10px;
+            margin-top: 10px;
         }
 
         button {
@@ -78,6 +87,14 @@
             margin-top: 30px;
             color: red;
         }
+
+        .dropzone-container {
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
     </style>
 </head>
 <body>
@@ -88,14 +105,16 @@
     <h1>Upload Front and Back of Your Insurance Card</h1>
 
     <form id="uploadForm" enctype="multipart/form-data">
-        <div id="dropzoneFront" class="dropzone">
-            Front of Card (Drag & Drop or Click)
-            <input type="file" id="frontFile" name="images" accept="image/*" style="display:none;" required>
-        </div>
+        <div class="dropzone-container">
+            <div id="dropzoneFront" class="dropzone">
+                Front of Card (Drag & Drop or Click)
+                <input type="file" id="frontFile" name="images" accept="image/*" style="display:none;" required>
+            </div>
 
-        <div id="dropzoneBack" class="dropzone">
-            Back of Card (Drag & Drop or Click)
-            <input type="file" id="backFile" name="images" accept="image/*" style="display:none;" required>
+            <div id="dropzoneBack" class="dropzone">
+                Back of Card (Drag & Drop or Click)
+                <input type="file" id="backFile" name="images" accept="image/*" style="display:none;" required>
+            </div>
         </div>
 
         <br>
@@ -111,16 +130,10 @@
     <div id="error"></div>
 
     <script>
-        const dropzoneFront = document.getElementById('dropzoneFront');
-        const dropzoneBack = document.getElementById('dropzoneBack');
-        const frontFileInput = document.getElementById('frontFile');
-        const backFileInput = document.getElementById('backFile');
-        const form = document.getElementById('uploadForm');
-        const spinner = document.getElementById('spinner');
-        const successDiv = document.getElementById('success');
-        const errorDiv = document.getElementById('error');
-
         function setupDropzone(dropzone, input) {
+            const previewImage = document.createElement('img');
+            previewImage.classList.add('preview');
+
             dropzone.addEventListener('click', () => input.click());
 
             dropzone.addEventListener('dragover', (e) => {
@@ -140,16 +153,35 @@
                     const dataTransfer = new DataTransfer();
                     dataTransfer.items.add(file);
                     input.files = dataTransfer.files;
-                    dropzone.innerText = `Uploaded: ${file.name}`;
+                    showPreview(file, dropzone, previewImage);
                 }
             });
 
             input.addEventListener('change', () => {
                 if (input.files[0]) {
-                    dropzone.innerText = `Uploaded: ${input.files[0].name}`;
+                    showPreview(input.files[0], dropzone, previewImage);
                 }
             });
+
+            function showPreview(file, zone, imgElement) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    imgElement.src = e.target.result;
+                    zone.innerHTML = ''; // Clear previous text
+                    zone.appendChild(imgElement);
+                };
+                reader.readAsDataURL(file);
+            }
         }
+
+        const dropzoneFront = document.getElementById('dropzoneFront');
+        const dropzoneBack = document.getElementById('dropzoneBack');
+        const frontFileInput = document.getElementById('frontFile');
+        const backFileInput = document.getElementById('backFile');
+        const form = document.getElementById('uploadForm');
+        const spinner = document.getElementById('spinner');
+        const successDiv = document.getElementById('success');
+        const errorDiv = document.getElementById('error');
 
         setupDropzone(dropzoneFront, frontFileInput);
         setupDropzone(dropzoneBack, backFileInput);
