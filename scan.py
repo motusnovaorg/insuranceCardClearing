@@ -15,10 +15,10 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SCOPES = ['https://www.googleapis.com/auth/drive']
 FOLDER_ID = os.getenv('FOLDER_ID')
 
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "google_credentials.json"
-project_id = "faxclearing"
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+project_id = "insurancecardscarping"
 location = "us" 
-processor_display_name = "fax_automation"
+processor_display_name = "insurance_card_scraper"
 output_json_path = "ocr_output.json"
 
 def make_open_ai_client(openai_api_key):
@@ -50,6 +50,7 @@ def analyze_all(data, client, max_tokens=2000):
                     "content": f"""Here is the text data from a patient's insurance card: \n\n{data}\n\n
                                     Please extract the following information:\n
                                     Insurance Company Name\nPatient First Name\nPatient Last Name\nMember ID\nGroup ID/ Group Number\nInsurance Plan\n
+                                    DO NOT ADD ANY FORMATTING TO THE INFORMATION THAT YOU GIVE ME.
                                 """
                 }
             ]

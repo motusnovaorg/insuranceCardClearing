@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Motus Nova Insurance Card Upload</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background-color: #f4f6f8;
+            text-align: center;
+            padding: 40px;
+            color: #333;
+        }
+
+        header img {
+            width: 180px;
+            margin-bottom: 20px;
+        }
+
+        h1 {
+            color: #0056A4;
+            font-size: 1.8rem;
+            margin-bottom: 30px;
+        }
+
+        .dropzone {
+            width: 300px;
+            height: 180px;
+            border: 2px dashed #aaa;
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin: 10px;
+            font-size: 1em;
+            color: #777;
+            cursor: pointer;
+            background-color: #fff;
+            transition: background-color 0.3s, border-color 0.3s;
+        }
+
+        .dropzone.dragover {
+            background-color: #e0f7fa;
+            border-color: #00acc1;
+            color: #007c91;
+        }
+
+        button {
+            background-color: #28a745;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 10px;
+            color: white;
+            font-size: 1.2em;
+            cursor: pointer;
+            margin-top: 20px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #218838;
+        }
+
+        #spinner {
+            display: none;
+            margin-top: 30px;
+        }
+
+        #success {
+            display: none;
+            margin-top: 30px;
+            color: #0056A4;
+            font-size: 1.4em;
+        }
+
+        #error {
+            display: none;
+            margin-top: 30px;
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <img src="{{ url_for('static', filename='motusnova_logo.png') }}" alt="Motus Nova Logo">
+    </header>
+
+    <h1>Upload Front and Back of Your Insurance Card</h1>
+
+    <form id="uploadForm" enctype="multipart/form-data">
+        <div id="dropzoneFront" class="dropzone">
+            Front of Card (Drag & Drop or Click)
+            <input type="file" id="frontFile" name="images" accept="image/*" style="display:none;" required>
+        </div>
+
+        <div id="dropzoneBack" class="dropzone">
+            Back of Card (Drag & Drop or Click)
+            <input type="file" id="backFile" name="images" accept="image/*" style="display:none;" required>
+        </div>
+
+        <br>
+        <button type="submit">Submit</button>
+    </form>
+
+    <div id="spinner">
+        <p>Your insurance cards are being processed...</p>
+        <img src="https://i.gifer.com/ZZ5H.gif" alt="Loading..." width="70px">
+    </div>
+
+    <div id="success"></div>
+    <div id="error"></div>
+
+    <script>
+        const dropzoneFront = document.getElementById('dropzoneFront');
+        const dropzoneBack = document.getElementById('dropzoneBack');
+        const frontFileInput = document.getElementById('frontFile');
+        const backFileInput = document.getElementById('backFile');
+        const form = document.getElementById('uploadForm');
+        const spinner = document.getElementById('spinner');
+        const successDiv = document.getElementById('success');
+        const errorDiv = document.getElementById('error');
+
+        function setupDropzone(dropzone, input) {
+            dropzone.addEventListener('click', () => input.click());
+
+            dropzone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropzone.classList.add('dragover');
+            });
+
+            dropzone.addEventListener('dragleave', () => {
+                dropzone.classList.remove('dragover');
+            });
+
+            dropzone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropzone.classList.remove('dragover');
+                const file = e.dataTransfer.files[0];
+                if (file) {
+                    const dataTransfer = new DataTransfer();
+                    dataTransfer.items.add(file);
+                    input.files = dataTransfer.files;
+                    dropzone.innerText = `Uploaded: ${file.name}`;
+                }
+            });
+
+            input.addEventListener('change', () => {
+                if (input.files[0]) {
+                    dropzone.innerText = `Uploaded: ${input.files[0].name}`;
+                }
+            });
+        }
+
+        setupDropzone(dropzoneFront, frontFileInput);
+        setupDropzone(dropzoneBack, backFileInput);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const formData = new FormData();
+            if (frontFileInput.files.length > 0) {
+                formData.append('images', frontFileInput.files[0]);
+            }
+            if (backFileInput.files.length > 0) {
+                formData.append('images', backFileInput.files[0]);
+            }
+
+            if (formData.getAll('images').length !== 2) {
+                errorDiv.innerText = "Please upload exactly one front and one back image.";
+                errorDiv.style.display = 'block';
+                return;
+            }
+
+            spinner.style.display = 'block';
+            successDiv.style.display = 'none';
+            errorDiv.style.display = 'none';
+
+            try {
+                const res = await fetch('/', {
+                    method: 'POST',
+                    body: formData
+                });
+                const data = await res.json();
+                spinner.style.display = 'none';
+
+                if (res.ok) {
+                    successDiv.innerHTML = `
+                        <p>Your insurance card information has been processed. Thank you for sharing your insurance cards, ${data.full_name}!</p>
+                        <p><a href="${data.link}" target="_blank">View Uploaded PDF</a></p>
+                    `;
+                    successDiv.style.display = 'block';
+                } else {
+                    errorDiv.innerText = data.error;
+                    errorDiv.style.display = 'block';
+                }
+            } catch (err) {
+                spinner.style.display = 'none';
+                errorDiv.innerText = "Something went wrong. Please try again.";
+                errorDiv.style.display = 'block';
+            }
+        });
+    </script>
+</body>
+</html>
