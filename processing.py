@@ -18,6 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 SCOPES = ['https://www.googleapis.com/auth/drive']
 FOLDER_ID = os.getenv('FOLDER_ID')
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+
 project_id = "insurancecardscarping"
 location = "us"
 processor_display_name = "insurance_card_scraper"
@@ -114,6 +115,7 @@ def get_or_create_processor(client, parent, display_name):
     for processor in client.list_processors(parent=parent):
         if processor.display_name == display_name:
             return processor.name
+    
     processor = client.create_processor(
         parent=parent, 
         processor=documentai.Processor(type_="OCR_PROCESSOR", display_name=display_name)
@@ -143,7 +145,7 @@ def convert_to_dictionary(text):
     data = {}
     
     # Add some debug logging
-    print(f"Raw OpenAI response:\n{text}\n")
+    print(f"Converting OpenAI response to dictionary: {text}")
     
     for line in text.splitlines():
         line = line.strip()
@@ -175,13 +177,16 @@ def upload_file_to_drive(drive_service, file_path, file_name, folder_id):
     metadata = {'name': file_name}
     if folder_id:
         metadata['parents'] = [folder_id]
+    
     media = MediaFileUpload(file_path, resumable=True)
     uploaded = drive_service.files().create(body=metadata, media_body=media, fields='id').execute()
     file_id = uploaded['id']
+    
     drive_service.permissions().create(
         fileId=file_id, 
         body={'type': 'anyone', 'role': 'reader'}
     ).execute()
+    
     return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
 
 def quickstart(project_id, location, display_name, file_path):
@@ -200,66 +205,105 @@ def quickstart(project_id, location, display_name, file_path):
     result = client.process_document(request=request)
     return result.document.text
 
-def convert_img_to_pdf(images_path, output_path):
+def convert_img_to_pdf(images_paths, output_path):
+    """
+    Convert images to PDF in the correct order (front first, back second).
+    
+    Args:
+        images_paths: List of image file paths in the correct order
+        output_path: Path where the PDF will be saved
+    """
     imgs = []
-    for file in sorted(os.listdir(images_path)):
-        if file.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img_path = os.path.join(images_path, file)
+    
+    # Process images in the order they were provided
+    for img_path in images_paths:
+        if os.path.exists(img_path) and img_path.lower().endswith(('.png', '.jpg', '.jpeg')):
             img = Image.open(img_path).convert('RGB')
             imgs.append(img)
+            print(f"Added to PDF: {os.path.basename(img_path)}")
     
-    if imgs:
-        imgs[0].save(output_path, save_all=True, append_images=imgs[1:])
-    else:
+    if len(imgs) == 0:
         raise ValueError("No images to convert!")
+    
+    if len(imgs) < 2:
+        raise ValueError("Need at least 2 images for front and back of insurance card")
+    
+    # Save with first image as base, append the rest
+    imgs[0].save(output_path, save_all=True, append_images=imgs[1:])
+    print(f"PDF created with {len(imgs)} images in correct order")
 
 def log_to_google_sheet(first_name, last_name, link):
-    sheet_id = os.getenv("WORKBOOK_ID")
-    sheet_name = os.getenv("SHEET_NAME")
-    creds = service_account.Credentials.from_service_account_file(
-        'credentials.json', 
-        scopes=['https://www.googleapis.com/auth/spreadsheets']
-    )
-    service = build('sheets', 'v4', credentials=creds)
-    sheet = service.spreadsheets()
-    
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row = [[timestamp, first_name, last_name, link]]
-    
-    request = sheet.values().append(
-        spreadsheetId=sheet_id,
-        range=f"{sheet_name}!A:D",
-        valueInputOption="USER_ENTERED",
-        insertDataOption="INSERT_ROWS",
-        body={"values": row}
-    )
-    request.execute()
+    try:
+        sheet_id = os.getenv("WORKBOOK_ID")
+        sheet_name = os.getenv("SHEET_NAME")
+        
+        if not sheet_id or not sheet_name:
+            print("Warning: Google Sheets logging skipped - missing WORKBOOK_ID or SHEET_NAME")
+            return
+        
+        creds = service_account.Credentials.from_service_account_file(
+            'credentials.json', 
+            scopes=['https://www.googleapis.com/auth/spreadsheets']
+        )
+        service = build('sheets', 'v4', credentials=creds)
+        sheet = service.spreadsheets()
+        
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        row = [[timestamp, first_name, last_name, link]]
+        
+        request = sheet.values().append(
+            spreadsheetId=sheet_id,
+            range=f"{sheet_name}!A:D",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": row}
+        )
+        request.execute()
+        print(f"Logged to Google Sheets: {first_name} {last_name}")
+    except Exception as e:
+        print(f"Error logging to Google Sheets: {e}")
+        # Don't fail the entire process if logging fails
 
 def process_insurance_cards(images_folder):
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY not found in environment variables")
+    
+    if not FOLDER_ID:
+        raise ValueError("FOLDER_ID not found in environment variables")
+    
+    if not os.path.exists('credentials.json'):
+        raise ValueError("credentials.json file not found")
+    
     openai_client = make_open_ai_client(OPENAI_API_KEY)
     
-    # Get all images and process them
-    all_images = sorted(os.listdir(images_folder))
+    all_files = os.listdir(images_folder)
+    image_files = [f for f in all_files if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    
+    # Sort by file modification time (which preserves upload order)
+    image_files.sort(key=lambda x: os.path.getmtime(os.path.join(images_folder, x)))
+    
     processed_images = []
     
-    for img_file in all_images:
-        if img_file.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img_path = os.path.join(images_folder, img_file)
-            
-            # Step 1: Auto-rotate based on EXIF
-            auto_rotate_image(img_path)
-            
-            # Step 2: Compress the image
-            compress_image(img_path)
-            
-            processed_images.append(img_path)
+    for img_file in image_files:
+        img_path = os.path.join(images_folder, img_file)
+        
+        # Step 1: Auto-rotate based on EXIF
+        auto_rotate_image(img_path)
+        
+        # Step 2: Compress the image
+        compress_image(img_path)
+        
+        processed_images.append(img_path)
+        print(f"Processed image {len(processed_images)}: {img_file}")
     
     if len(processed_images) < 2:
         raise ValueError("Need at least 2 images for front and back of insurance card")
     
-    # Process the front image for OCR
+    # Process the front image (first uploaded) for OCR
     front_image_path = processed_images[0]
     front_text = quickstart(project_id, location, processor_display_name, front_image_path)
+    
+    print(f"OCR Text from front image: {front_text[:200]}...")  # Debug logging
     
     # Analyze with OpenAI
     analysis = analyze_all(front_text, openai_client, 500)
@@ -286,10 +330,12 @@ def process_insurance_cards(images_folder):
     
     full_name = f"{first_name} {last_name}"
     
-    # Create PDF from processed images
+    # Create PDF from processed images in correct order (front first, back second)
     pdf_filename = f"{first_name}{last_name}InsuranceCard.pdf"
     pdf_path = os.path.join(images_folder, pdf_filename)
-    convert_img_to_pdf(images_folder, pdf_path)
+    
+    # Pass the processed images list directly to maintain order
+    convert_img_to_pdf(processed_images, pdf_path)
     
     # Upload to Google Drive
     drive_service = authenticate_services()

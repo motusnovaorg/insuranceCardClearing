@@ -3,57 +3,61 @@ import tempfile
 import shutil
 from processing import process_insurance_cards
 import os
+from flask_cors import CORS
+import logging
 
 app = Flask(__name__)
+CORS(app)
 
-# Configure maximum file size (15MB to allow large uploads before compression)
-app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024  # 15MB
 
-@app.route('/', methods=['GET'])
-def upload_form():
-    return render_template('upload.html')
+app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024  # 6MB --> # Configure maximum file size (15MB to allow large uploads before compression)
 
-@app.route('/', methods=['POST'])
-def upload_and_process():
+@app.route('/', methods=['GET', 'POST'])
+def upload_form_or_process():
+    if request.method == 'GET':
+        try:
+            return render_template('upload.html')
+        except Exception as e:
+            print(f"Template error: {e}")
+            return jsonify({"error": "Template not found"}), 500
+    
     try:
         files = request.files.getlist('images')
+        print(f"DEBUG: received {len(files)} files")
+        for f in files:
+            print(f" - filename: {f.filename}")
         
-        # Validate number of files
-        if not files or len(files) != 2:
-            return jsonify({"error": "Please upload exactly two images."}), 400
+        files = [f for f in files if f and f.filename]
         
-        # Validate file types and sizes
+        if len(files) != 2:
+            return jsonify({"error": "Please upload exactly two images (front and back of insurance card)."}), 400
+        
         allowed_extensions = {'.jpg', '.jpeg', '.png'}
         for file in files:
             if not file.filename:
                 return jsonify({"error": "All files must have filenames."}), 400
             
-            # Check file extension
             file_ext = os.path.splitext(file.filename.lower())[1]
+            print(f"Received file: {file.filename}, extension: {file_ext}")
+            
             if file_ext not in allowed_extensions:
                 return jsonify({"error": f"File {file.filename} must be a JPG, JPEG, or PNG image."}), 400
         
-        # Create temporary directory
         temp_dir = tempfile.mkdtemp()
         
         try:
-            # Save uploaded files
             saved_files = []
             for file in files:
-                if file.filename:
-                    file_path = os.path.join(temp_dir, file.filename)
-                    file.save(file_path)
-                    saved_files.append(file_path)
-                    
-                    # Check if file was saved successfully
-                    if not os.path.exists(file_path):
-                        raise Exception(f"Failed to save file: {file.filename}")
-                    
-                    # Log original file size
-                    file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
-                    print(f"Uploaded {file.filename}: {file_size_mb:.2f}MB")
+                file_path = os.path.join(temp_dir, file.filename)
+                file.save(file_path)
+                saved_files.append(file_path)
+                
+                if not os.path.exists(file_path):
+                    raise Exception(f"Failed to save file: {file.filename}")
+                
+                file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                print(f"Uploaded {file.filename}: {file_size_mb:.2f}MB")
             
-            # Process the insurance cards (includes compression)
             shareable_link, patient_full_name = process_insurance_cards(temp_dir)
             
             return jsonify({
@@ -61,17 +65,15 @@ def upload_and_process():
                 "full_name": patient_full_name,
                 "message": "Insurance cards processed successfully!"
             })
-        
+            
         finally:
-            # Always clean up temporary directory
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
-
+                
     except Exception as e:
         error_msg = str(e)
         print(f"Error processing insurance cards: {error_msg}")
         
-        # Handle specific error types
         if "413" in error_msg or "Request Entity Too Large" in error_msg:
             return jsonify({"error": "File size too large. Please upload smaller images (under 15MB each)."}), 413
         elif "No images to convert" in error_msg:
