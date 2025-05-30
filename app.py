@@ -10,7 +10,7 @@ app = Flask(__name__)
 CORS(app)
 
 
-app.config['MAX_CONTENT_LENGTH'] = 6 * 1024 * 1024  # 6MB --> # Configure maximum file size (15MB to allow large uploads before compression)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 6MB --> # Configure maximum file size (15MB to allow large uploads before compression)
 
 @app.route('/', methods=['GET', 'POST'])
 def upload_form_or_process():
