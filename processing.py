@@ -1,33 +1,139 @@
 import os
-import re
 import shutil
+import uuid
+import json
 from dotenv import load_dotenv
 from PIL import Image, ExifTags
-from openai import OpenAI
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from google.api_core.client_options import ClientOptions
-from google.cloud import documentai
-import datetime
+import boto3
+import psycopg2
 
 load_dotenv()
 
-# Config
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SCOPES = ['https://www.googleapis.com/auth/drive']
-FOLDER_ID = os.getenv('FOLDER_ID')
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
-
-project_id = "insurancecardscarping"
-location = "us"
-processor_display_name = "insurance_card_scraper"
+# AWS S3 Configuration
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_REGION = os.getenv("AWS_REGION")
+S3_BUCKET = os.getenv("S3_BUCKET")
 
 # Image compression settings
 MAX_FILE_SIZE_MB = 2  # Target max file size in MB
 MAX_DIMENSION = 2000  # Max width or height in pixels
 JPEG_QUALITY = 85     # JPEG quality (1-100, higher = better quality)
 
+def load_db_credentials():
+    """Load database credentials from game_db_credentials.json"""
+    with open('game_db_credentials.json', 'r') as f:
+        return json.load(f)
+
+def get_db_connection():
+    """Create and return a PostgreSQL database connection"""
+    try:
+        credentials = load_db_credentials()
+        connection = psycopg2.connect(
+            host=credentials['host'],
+            database=credentials['database'],
+            user=credentials['user'],
+            password=credentials['password'],
+            port=credentials.get('port', 5432)
+        )
+        return connection
+    except Exception as e:
+        print(f"Error connecting to database: {e}")
+        raise
+
+def update_insurance_card_in_db(insurance_id, s3_url):
+    """Update the insurance_fresh table and insert into insurance table with the S3 URL"""
+    if not insurance_id:
+        print("No insurance_id provided, skipping database update")
+        return
+    
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        
+        # Start transaction
+        connection.autocommit = False
+        
+        # 1. Update the primary_insurance_card column in insurance_fresh table
+        update_query = """
+            UPDATE insurance_fresh 
+            SET primary_insurance_card = %s 
+            WHERE insurance_id = %s
+        """
+        
+        cursor.execute(update_query, (s3_url, insurance_id))
+        
+        if cursor.rowcount > 0:
+            print(f"Successfully updated insurance_fresh table for insurance_id {insurance_id}")
+        else:
+            print(f"Warning: No records found in insurance_fresh for insurance_id {insurance_id}")
+        
+        # 2. Insert into insurance table
+        insert_query = """
+            INSERT INTO insurance (insurance_id, primary_insurance_card) 
+            VALUES (%s, %s)
+        """
+        
+        cursor.execute(insert_query, (insurance_id, s3_url))
+        print(f"Successfully inserted/updated insurance table for insurance_id {insurance_id}")
+        
+        # Commit both operations
+        connection.commit()
+        print(f"Database operations completed successfully for insurance_id {insurance_id} with S3 URL: {s3_url}")
+        
+        cursor.close()
+        connection.close()
+        
+    except Exception as e:
+        # Rollback in case of error
+        if connection:
+            connection.rollback()
+            print(f"Database transaction rolled back due to error: {e}")
+        print(f"Error updating database: {e}")
+        raise
+
+def create_s3_client():
+    """Create and return an S3 client"""
+    return boto3.client(
+        's3',
+        aws_access_key_id=AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        region_name=AWS_REGION
+    )
+
+def upload_to_s3(file_path, file_name):
+    """Upload a file to S3 and return the URL"""
+    try:
+        s3_client = create_s3_client()
+        
+        # Generate unique key for S3
+        file_ext = os.path.splitext(file_name)[1]
+        new_file_id = str(uuid.uuid4())
+        new_file_name = f"{new_file_id}{file_ext}"
+        new_file_key = f"uploads/{new_file_name}"
+        
+        # Upload to S3
+        with open(file_path, 'rb') as file_data:
+            s3_client.upload_fileobj(
+                file_data,
+                S3_BUCKET,
+                new_file_key,
+                ExtraArgs={
+                    'ContentType': 'application/pdf',
+                }
+            )
+        
+        # Generate S3 URL
+        s3_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{new_file_key}"
+        print(f"Successfully uploaded to S3: {s3_url}")
+        
+        return s3_url
+        
+    except Exception as e:
+        print(f"Error uploading to S3: {e}")
+        raise
+
+# ORIGINAL WORKING IMAGE FUNCTIONS - UNCHANGED
 def compress_image(image_path, max_size_mb=MAX_FILE_SIZE_MB, max_dimension=MAX_DIMENSION, quality=JPEG_QUALITY):
     """
     Compress an image to reduce file size while maintaining OCR readability.
@@ -108,103 +214,6 @@ def auto_rotate_image(image_path):
         # Image doesn't have EXIF data or other issues
         pass
 
-def make_open_ai_client(api_key):
-    return OpenAI(api_key=api_key)
-
-def get_or_create_processor(client, parent, display_name):
-    for processor in client.list_processors(parent=parent):
-        if processor.display_name == display_name:
-            return processor.name
-    
-    processor = client.create_processor(
-        parent=parent, 
-        processor=documentai.Processor(type_="OCR_PROCESSOR", display_name=display_name)
-    )
-    return processor.name
-
-def analyze_all(text, client, max_tokens=2000):
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are an assistant that extracts specific information from insurance card text. Always respond in the exact format requested."},
-            {"role": "user", "content": f"""Here is insurance card text:\n\n{text}\n\nPlease extract the following information and format your response EXACTLY as shown below. If any information is not found, use the specified default values:
-
-Patient First Name: [first name or "Friend" if not found]
-Patient Last Name: [last name or "Unknown" if not found]
-Member ID: [member ID or "Not Found" if not found]
-Group ID: [group ID or "Not Found" if not found]
-Insurance Company: [company name or "Not Found" if not found]
-
-Important: Use this exact format with colons and the exact field names shown above."""}
-        ]
-    )
-    return response.choices[0].message.content.strip()
-
-def convert_to_dictionary(text):
-    """Convert the OpenAI response to a dictionary with better error handling."""
-    data = {}
-    
-    # Add some debug logging
-    print(f"Converting OpenAI response to dictionary: {text}")
-    
-    for line in text.splitlines():
-        line = line.strip()
-        if ": " in line:
-            key, value = line.split(": ", 1)
-            data[key.strip()] = value.strip()
-    
-    # Ensure we have the required keys with defaults
-    required_fields = {
-        'Patient First Name': 'Friend',
-        'Patient Last Name': 'Unknown',
-        'Member ID': 'Not Found',
-        'Group ID': 'Not Found',
-        'Insurance Company': 'Not Found'
-    }
-    
-    for field, default in required_fields.items():
-        if field not in data or not data[field] or data[field].lower() in ['not found', 'not provided', 'not available', 'n/a', '']:
-            data[field] = default
-    
-    print(f"Parsed data: {data}")
-    return data
-
-def authenticate_services():
-    creds = service_account.Credentials.from_service_account_file('credentials.json', scopes=SCOPES)
-    return build('drive', 'v3', credentials=creds)
-
-def upload_file_to_drive(drive_service, file_path, file_name, folder_id):
-    metadata = {'name': file_name}
-    if folder_id:
-        metadata['parents'] = [folder_id]
-    
-    media = MediaFileUpload(file_path, resumable=True)
-    uploaded = drive_service.files().create(body=metadata, media_body=media, fields='id').execute()
-    file_id = uploaded['id']
-    
-    drive_service.permissions().create(
-        fileId=file_id, 
-        body={'type': 'anyone', 'role': 'reader'}
-    ).execute()
-    
-    return f"https://drive.google.com/file/d/{file_id}/view?usp=sharing"
-
-def quickstart(project_id, location, display_name, file_path):
-    opts = ClientOptions(api_endpoint=f"{location}-documentai.googleapis.com")
-    client = documentai.DocumentProcessorServiceClient(client_options=opts)
-    parent = client.common_location_path(project_id, location)
-    processor_name = get_or_create_processor(client, parent, display_name)
-    
-    with open(file_path, "rb") as image:
-        content = image.read()
-    
-    request = documentai.ProcessRequest(
-        name=processor_name,
-        raw_document=documentai.RawDocument(content=content, mime_type="image/jpeg")
-    )
-    result = client.process_document(request=request)
-    return result.document.text
-
 def convert_img_to_pdf(images_paths, output_path):
     """
     Convert images to PDF in the correct order (front first, back second).
@@ -218,7 +227,7 @@ def convert_img_to_pdf(images_paths, output_path):
     # Process images in the order they were provided
     for img_path in images_paths:
         if os.path.exists(img_path) and img_path.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img = Image.open(img_path).convert('RGB')
+            img = Image.open(img_path).convert('RGB')  # ORIGINAL SIMPLE METHOD THAT WORKS
             imgs.append(img)
             print(f"Added to PDF: {os.path.basename(img_path)}")
     
@@ -232,49 +241,24 @@ def convert_img_to_pdf(images_paths, output_path):
     imgs[0].save(output_path, save_all=True, append_images=imgs[1:])
     print(f"PDF created with {len(imgs)} images in correct order")
 
-def log_to_google_sheet(first_name, last_name, link):
-    try:
-        sheet_id = os.getenv("WORKBOOK_ID")
-        sheet_name = os.getenv("SHEET_NAME")
-        
-        if not sheet_id or not sheet_name:
-            print("Warning: Google Sheets logging skipped - missing WORKBOOK_ID or SHEET_NAME")
-            return
-        
-        creds = service_account.Credentials.from_service_account_file(
-            'credentials.json', 
-            scopes=['https://www.googleapis.com/auth/spreadsheets']
-        )
-        service = build('sheets', 'v4', credentials=creds)
-        sheet = service.spreadsheets()
-        
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        row = [[timestamp, first_name, last_name, link]]
-        
-        request = sheet.values().append(
-            spreadsheetId=sheet_id,
-            range=f"{sheet_name}!A:D",
-            valueInputOption="USER_ENTERED",
-            insertDataOption="INSERT_ROWS",
-            body={"values": row}
-        )
-        request.execute()
-        print(f"Logged to Google Sheets: {first_name} {last_name}")
-    except Exception as e:
-        print(f"Error logging to Google Sheets: {e}")
-        # Don't fail the entire process if logging fails
-
-def process_insurance_cards(images_folder):
-    if not OPENAI_API_KEY:
-        raise ValueError("OPENAI_API_KEY not found in environment variables")
+def process_insurance_cards(images_folder, insurance_id=None):
+    """
+    Process insurance card images and upload to S3, optionally update database
     
-    if not FOLDER_ID:
-        raise ValueError("FOLDER_ID not found in environment variables")
+    Args:
+        images_folder: Path to folder containing images
+        insurance_id: Optional insurance ID for database update
     
-    if not os.path.exists('credentials.json'):
-        raise ValueError("credentials.json file not found")
+    Returns:
+        str: S3 URL of uploaded PDF
+    """
+    # Validate AWS credentials
+    if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET]):
+        raise ValueError("Missing AWS credentials or S3 bucket configuration")
     
-    openai_client = make_open_ai_client(OPENAI_API_KEY)
+    # Validate database credentials file exists if insurance_id is provided
+    if insurance_id and not os.path.exists('game_db_credentials.json'):
+        raise ValueError("game_db_credentials.json file not found")
     
     all_files = os.listdir(images_folder)
     image_files = [f for f in all_files if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
@@ -299,49 +283,18 @@ def process_insurance_cards(images_folder):
     if len(processed_images) < 2:
         raise ValueError("Need at least 2 images for front and back of insurance card")
     
-    # Process the front image (first uploaded) for OCR
-    front_image_path = processed_images[0]
-    front_text = quickstart(project_id, location, processor_display_name, front_image_path)
-    
-    print(f"OCR Text from front image: {front_text[:200]}...")  # Debug logging
-    
-    # Analyze with OpenAI
-    analysis = analyze_all(front_text, openai_client, 500)
-    info = convert_to_dictionary(analysis)
-    
-    # Extract patient information with better error handling
-    first_name = info.get('Patient First Name', 'Friend')
-    last_name = info.get('Patient Last Name', 'Unknown')
-    
-    # Clean up the names
-    if isinstance(first_name, str):
-        first_name = first_name.strip().capitalize()
-        if first_name.lower() in ['not found', 'not provided', 'not available', 'n/a', '']:
-            first_name = 'Friend'
-    else:
-        first_name = 'Friend'
-        
-    if isinstance(last_name, str):
-        last_name = last_name.strip().capitalize()
-        if last_name.lower() in ['not found', 'not provided', 'not available', 'n/a', '']:
-            last_name = 'Unknown'
-    else:
-        last_name = 'Unknown'
-    
-    full_name = f"{first_name} {last_name}"
-    
-    # Create PDF from processed images in correct order (front first, back second)
-    pdf_filename = f"{first_name}{last_name}InsuranceCard.pdf"
+    # Generate unique PDF filename using UUID
+    pdf_filename = f"{str(uuid.uuid4())}.pdf"
     pdf_path = os.path.join(images_folder, pdf_filename)
     
-    # Pass the processed images list directly to maintain order
+    # Create PDF from processed images in correct order (front first, back second)
     convert_img_to_pdf(processed_images, pdf_path)
     
-    # Upload to Google Drive
-    drive_service = authenticate_services()
-    link = upload_file_to_drive(drive_service, pdf_path, pdf_filename, FOLDER_ID)
+    # Upload to S3
+    s3_url = upload_to_s3(pdf_path, pdf_filename)
     
-    # Log to Google Sheets
-    log_to_google_sheet(first_name, last_name, link)
+    # Update database if insurance_id is provided
+    if insurance_id:
+        update_insurance_card_in_db(insurance_id, s3_url)
     
-    return link, full_name
+    return s3_url
