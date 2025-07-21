@@ -9,11 +9,17 @@ import logging
 app = Flask(__name__)
 CORS(app)
 
-
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 6MB --> # Configure maximum file size (15MB to allow large uploads before compression)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10MB max file size
 
 @app.route('/', methods=['GET', 'POST'])
 def upload_form_or_process():
+    return handle_upload(None)
+
+@app.route('/<insurance_id>', methods=['GET', 'POST'])
+def upload_form_or_process_with_id(insurance_id):
+    return handle_upload(insurance_id)
+
+def handle_upload(insurance_id):
     if request.method == 'GET':
         try:
             return render_template('upload.html')
@@ -23,7 +29,7 @@ def upload_form_or_process():
     
     try:
         files = request.files.getlist('images')
-        print(f"DEBUG: received {len(files)} files")
+        print(f"DEBUG: received {len(files)} files for insurance_id: {insurance_id}")
         for f in files:
             print(f" - filename: {f.filename}")
         
@@ -58,12 +64,13 @@ def upload_form_or_process():
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
                 print(f"Uploaded {file.filename}: {file_size_mb:.2f}MB")
             
-            shareable_link, patient_full_name = process_insurance_cards(temp_dir)
+            # Pass insurance_id to processing function
+            s3_url = process_insurance_cards(temp_dir, insurance_id)
             
             return jsonify({
-                "link": shareable_link,
-                "full_name": patient_full_name,
-                "message": "Insurance cards processed successfully!"
+                "link": s3_url,
+                "message": "Insurance cards processed successfully!",
+                "insurance_id": insurance_id
             })
             
         finally:
@@ -75,7 +82,7 @@ def upload_form_or_process():
         print(f"Error processing insurance cards: {error_msg}")
         
         if "413" in error_msg or "Request Entity Too Large" in error_msg:
-            return jsonify({"error": "File size too large. Please upload smaller images (under 15MB each)."}), 413
+            return jsonify({"error": "File size too large. Please upload smaller images (under 10MB each)."}), 413
         elif "No images to convert" in error_msg:
             return jsonify({"error": "No valid image files found. Please upload JPG, JPEG, or PNG files."}), 400
         elif "Need at least 2 images" in error_msg:
@@ -85,7 +92,7 @@ def upload_form_or_process():
 
 @app.errorhandler(413)
 def too_large(e):
-    return jsonify({"error": "File size too large. Please upload images smaller than 15MB each."}), 413
+    return jsonify({"error": "File size too large. Please upload images smaller than 10MB each."}), 413
 
 @app.errorhandler(400)
 def bad_request(e):
