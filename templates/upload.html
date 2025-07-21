@@ -143,7 +143,7 @@
 </head>
 <body>
   <header>
-    <img src="{{ url_for('static', filename='motusnova_logo.png') }}" alt="Motus Nova Logo">
+    <img src="/MoInsCard/static/motusnova_logo.png" alt="Motus Nova Logo">
   </header>
   
   <h1>Upload or Take a Photo of Your Insurance Card</h1>
@@ -205,6 +205,12 @@
     const backFilePhoto = document.getElementById('backFilePhoto');
     const frontPreview = document.getElementById('frontPreview');
     const backPreview = document.getElementById('backPreview');
+    
+    // Get insurance_id from URL path
+    const pathSegments = window.location.pathname.split('/').filter(segment => segment !== '');
+    const insurance_id = pathSegments.length > 1 ? pathSegments[pathSegments.length - 1] : null;
+    
+    console.log('Insurance ID from URL:', insurance_id);
     
     // Mobile image compression function
     function compressImage(file, maxWidth = 1500, quality = 0.8) {
@@ -289,7 +295,6 @@
     function showSuccess(data) {
       successDiv.innerHTML = `
         <p>${data.message}</p>
-        <p><strong>${data.full_name}</strong></p>
         <p><a href="${data.link}" target="_blank">View Uploaded PDF</a></p>
       `;
       successDiv.style.display = 'block';
@@ -348,7 +353,8 @@
         console.log('Submitting form with files:', frontImage.name, backImage.name);
         console.log('Server URL:', window.location.origin);
         
-        const res = await fetch('https://three.motusnova.com/MoInsCard/', {
+        // Submit to the current URL (which includes insurance_id if present)
+        const res = await fetch(window.location.pathname, {
           method: 'POST',
           body: formData,
           // Add timeout for mobile networks
