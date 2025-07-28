@@ -41,11 +41,14 @@ def get_db_connection():
         print(f"Error connecting to database: {e}")
         raise
 
-def update_insurance_card_in_db(insurance_id, s3_url):
+def update_insurance_card_in_db(insurance_id, s3_url, insurance_type='primary'):
     """Update the insurance_fresh table and insert into insurance table with the S3 URL"""
     if not insurance_id:
         print("No insurance_id provided, skipping database update")
         return
+    
+    # Determine column name based on insurance type
+    column_name = f"{insurance_type}_insurance_card"
     
     try:
         connection = get_db_connection()
@@ -54,32 +57,32 @@ def update_insurance_card_in_db(insurance_id, s3_url):
         # Start transaction
         connection.autocommit = False
         
-        # 1. Update the primary_insurance_card column in insurance_fresh table
-        update_query = """
+        # 1. Update the appropriate column in insurance_fresh table
+        update_query = f"""
             UPDATE insurance_fresh 
-            SET primary_insurance_card = %s 
+            SET {column_name} = %s 
             WHERE insurance_id = %s
         """
         
         cursor.execute(update_query, (s3_url, insurance_id))
         
         if cursor.rowcount > 0:
-            print(f"Successfully updated insurance_fresh table for insurance_id {insurance_id}")
+            print(f"Successfully updated insurance_fresh table for insurance_id {insurance_id} ({insurance_type})")
         else:
             print(f"Warning: No records found in insurance_fresh for insurance_id {insurance_id}")
         
-        # 2. Insert into insurance table
-        insert_query = """
-            INSERT INTO insurance (insurance_id, primary_insurance_card) 
+        # 2. Insert into insurance table with the appropriate column
+        insert_query = f"""
+            INSERT INTO insurance (insurance_id, {column_name}) 
             VALUES (%s, %s)
         """
         
         cursor.execute(insert_query, (insurance_id, s3_url))
-        print(f"Successfully inserted/updated insurance table for insurance_id {insurance_id}")
+        print(f"Successfully inserted/updated insurance table for insurance_id {insurance_id} ({insurance_type})")
         
         # Commit both operations
         connection.commit()
-        print(f"Database operations completed successfully for insurance_id {insurance_id} with S3 URL: {s3_url}")
+        print(f"Database operations completed successfully for insurance_id {insurance_id} with S3 URL: {s3_url} ({insurance_type})")
         
         cursor.close()
         connection.close()
@@ -101,15 +104,15 @@ def create_s3_client():
         region_name=AWS_REGION
     )
 
-def upload_to_s3(file_path, file_name):
+def upload_to_s3(file_path, file_name, insurance_type='primary'):
     """Upload a file to S3 and return the URL"""
     try:
         s3_client = create_s3_client()
         
-        # Generate unique key for S3
+        # Generate unique key for S3 with insurance type prefix
         file_ext = os.path.splitext(file_name)[1]
         new_file_id = str(uuid.uuid4())
-        new_file_name = f"{new_file_id}{file_ext}"
+        new_file_name = f"{insurance_type}_{new_file_id}{file_ext}"
         new_file_key = f"uploads/{new_file_name}"
         
         # Upload to S3
@@ -125,7 +128,7 @@ def upload_to_s3(file_path, file_name):
         
         # Generate S3 URL
         s3_url = f"https://{S3_BUCKET}.s3.{AWS_REGION}.amazonaws.com/{new_file_key}"
-        print(f"Successfully uploaded to S3: {s3_url}")
+        print(f"Successfully uploaded to S3: {s3_url} ({insurance_type})")
         
         return s3_url
         
@@ -133,7 +136,7 @@ def upload_to_s3(file_path, file_name):
         print(f"Error uploading to S3: {e}")
         raise
 
-# ORIGINAL WORKING IMAGE FUNCTIONS - UNCHANGED
+# IMPROVED IMAGE COMPRESSION FUNCTION - Fixed RGBA issue
 def compress_image(image_path, max_size_mb=MAX_FILE_SIZE_MB, max_dimension=MAX_DIMENSION, quality=JPEG_QUALITY):
     """
     Compress an image to reduce file size while maintaining OCR readability.
@@ -145,48 +148,72 @@ def compress_image(image_path, max_size_mb=MAX_FILE_SIZE_MB, max_dimension=MAX_D
         quality: JPEG quality (1-100)
     """
     try:
-        with Image.open(image_path) as img:
-            # Convert to RGB if necessary (for JPEG compatibility)
-            if img.mode in ('RGBA', 'P'):
-                img = img.convert('RGB')
+        img = Image.open(image_path)
+        
+        print(f"Original image mode: {img.mode} for {os.path.basename(image_path)}")
+        
+        # Convert to RGB if necessary (for JPEG compatibility) - FIXED RGBA ISSUE
+        if img.mode in ('RGBA', 'P', 'LA'):
+            print(f"Converting {img.mode} to RGB with white background")
+            # Create white background for transparent images
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            if img.mode == 'P':
+                img = img.convert('RGBA')
+            if img.mode in ('RGBA', 'LA'):
+                background.paste(img, mask=img.split()[-1])
+            else:
+                background.paste(img)
+            img = background
+        elif img.mode != 'RGB':
+            print(f"Converting {img.mode} to RGB")
+            img = img.convert('RGB')
+        
+        # Get original dimensions
+        width, height = img.size
+        
+        # Calculate new dimensions while maintaining aspect ratio
+        if width > max_dimension or height > max_dimension:
+            if width > height:
+                new_width = max_dimension
+                new_height = int((height * max_dimension) / width)
+            else:
+                new_height = max_dimension
+                new_width = int((width * max_dimension) / height)
             
-            # Get original dimensions
-            width, height = img.size
-            
-            # Calculate new dimensions while maintaining aspect ratio
-            if width > max_dimension or height > max_dimension:
-                if width > height:
-                    new_width = max_dimension
-                    new_height = int((height * max_dimension) / width)
-                else:
-                    new_height = max_dimension
-                    new_width = int((width * max_dimension) / height)
-                
-                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            
-            # Save with compression
-            temp_path = image_path + "_temp"
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Save with compression
+        temp_path = image_path + "_temp"
+        img.save(temp_path, "JPEG", quality=quality, optimize=True)
+        
+        # Check file size and adjust quality if needed
+        file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+        
+        # If still too large, reduce quality further
+        while file_size_mb > max_size_mb and quality > 30:
+            quality -= 10
             img.save(temp_path, "JPEG", quality=quality, optimize=True)
-            
-            # Check file size and adjust quality if needed
             file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
-            
-            # If still too large, reduce quality further
-            while file_size_mb > max_size_mb and quality > 30:
-                quality -= 10
-                img.save(temp_path, "JPEG", quality=quality, optimize=True)
-                file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
-            
-            # Replace original with compressed version
-            shutil.move(temp_path, image_path)
-            
-            print(f"Compressed {os.path.basename(image_path)}: {file_size_mb:.2f}MB (quality: {quality})")
-            
+        
+        # Replace original with compressed version
+        shutil.move(temp_path, image_path)
+        
+        # Close the image
+        img.close()
+        
+        print(f"Compressed {os.path.basename(image_path)}: {file_size_mb:.2f}MB (quality: {quality})")
+        
     except Exception as e:
         print(f"Error compressing image {image_path}: {str(e)}")
         # If compression fails, keep original file
         if os.path.exists(image_path + "_temp"):
             os.remove(image_path + "_temp")
+        # Make sure to close image if it was opened
+        try:
+            if 'img' in locals():
+                img.close()
+        except:
+            pass
 
 def auto_rotate_image(image_path):
     """Auto-rotate image based on EXIF orientation data."""
@@ -241,13 +268,14 @@ def convert_img_to_pdf(images_paths, output_path):
     imgs[0].save(output_path, save_all=True, append_images=imgs[1:])
     print(f"PDF created with {len(imgs)} images in correct order")
 
-def process_insurance_cards(images_folder, insurance_id=None):
+def process_insurance_cards(images_folder, insurance_id=None, insurance_type='primary'):
     """
     Process insurance card images and upload to S3, optionally update database
     
     Args:
         images_folder: Path to folder containing images
         insurance_id: Optional insurance ID for database update
+        insurance_type: Type of insurance ('primary' or 'secondary')
     
     Returns:
         str: S3 URL of uploaded PDF
@@ -283,18 +311,18 @@ def process_insurance_cards(images_folder, insurance_id=None):
     if len(processed_images) < 2:
         raise ValueError("Need at least 2 images for front and back of insurance card")
     
-    # Generate unique PDF filename using UUID
-    pdf_filename = f"{str(uuid.uuid4())}.pdf"
+    # Generate unique PDF filename using UUID with insurance type prefix
+    pdf_filename = f"{insurance_type}_{str(uuid.uuid4())}.pdf"
     pdf_path = os.path.join(images_folder, pdf_filename)
     
     # Create PDF from processed images in correct order (front first, back second)
     convert_img_to_pdf(processed_images, pdf_path)
     
-    # Upload to S3
-    s3_url = upload_to_s3(pdf_path, pdf_filename)
+    # Upload to S3 with insurance type
+    s3_url = upload_to_s3(pdf_path, pdf_filename, insurance_type)
     
     # Update database if insurance_id is provided
     if insurance_id:
-        update_insurance_card_in_db(insurance_id, s3_url)
+        update_insurance_card_in_db(insurance_id, s3_url, insurance_type)
     
     return s3_url
