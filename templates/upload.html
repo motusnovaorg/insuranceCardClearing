@@ -177,6 +177,47 @@
       opacity: 0.9;
     }
 
+    /* Success Modal Styles */
+    .success-modal .modal-content {
+      background: linear-gradient(135deg, #f0f9ff 0%, #e0f7fa 100%);
+      border: 2px solid #28a745;
+    }
+    .success-modal h2 {
+      color: #28a745;
+      margin-bottom: 20px;
+      font-size: 1.5rem;
+    }
+    .success-modal .success-icon {
+      font-size: 4rem;
+      color: #28a745;
+      margin-bottom: 20px;
+    }
+    .success-modal p {
+      font-size: 1.1rem;
+      color: #333;
+      line-height: 1.6;
+      margin-bottom: 20px;
+    }
+    .success-modal .modal-btn-ok {
+      background-color: #28a745;
+      color: white;
+      padding: 12px 40px;
+      font-size: 1.1rem;
+    }
+    .success-modal .pdf-link {
+      display: inline-block;
+      margin-top: 15px;
+      padding: 8px 20px;
+      background-color: #007bff;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+    }
+    .success-modal .pdf-link:hover {
+      background-color: #0056b3;
+    }
+
     /* Secondary Form Styles */
     #secondaryForm {
       display: none;
@@ -211,6 +252,9 @@
       .modal-btn {
         width: 200px;
         margin-bottom: 10px;
+      }
+      .success-modal .success-icon {
+        font-size: 3rem;
       }
     }
   </style>
@@ -303,6 +347,19 @@
       </div>
     </div>
   </div>
+
+  <!-- Success Modal -->
+  <div id="successModal" class="modal success-modal">
+    <div class="modal-content">
+      <div class="success-icon">✓</div>
+      <h2>Success!</h2>
+      <p id="successMessage"></p>
+      <div id="successPdfLink"></div>
+      <div class="modal-buttons">
+        <button class="modal-btn modal-btn-ok" onclick="closeSuccessModal()">OK</button>
+      </div>
+    </div>
+  </div>
   
   <div id="spinner">
     <p>Your insurance cards are being processed...</p>
@@ -320,6 +377,7 @@
     const secondaryForm = document.getElementById('secondaryForm');
     const secondaryUploadForm = document.getElementById('secondaryUploadForm');
     const secondaryModal = document.getElementById('secondaryModal');
+    const successModal = document.getElementById('successModal');
     const spinner = document.getElementById('spinner');
     const successDiv = document.getElementById('success');
     const errorDiv = document.getElementById('error');
@@ -452,13 +510,25 @@
       }
     }
     
-    function showSuccess(data) {
-      successDiv.innerHTML = `
-        <p>${data.message}</p>
-        ${data.link ? `<p><a href="${data.link}" target="_blank">View Uploaded PDF</a></p>` : ''}
-      `;
-      successDiv.style.display = 'block';
+    function showSuccessModal(data) {
+      const successMessage = document.getElementById('successMessage');
+      const successPdfLink = document.getElementById('successPdfLink');
+      
+      successMessage.textContent = data.message;
+      
+      if (data.link) {
+        successPdfLink.innerHTML = `<a href="${data.link}" target="_blank" class="pdf-link">View Uploaded PDF</a>`;
+      } else {
+        successPdfLink.innerHTML = '';
+      }
+      
+      successModal.style.display = 'block';
       errorDiv.style.display = 'none';
+      successDiv.style.display = 'none';
+    }
+    
+    function closeSuccessModal() {
+      successModal.style.display = 'none';
     }
     
     // Show secondary form
@@ -473,7 +543,7 @@
     // Finish with primary only
     function finishPrimaryOnly() {
       secondaryModal.style.display = 'none';
-      showSuccess({
+      showSuccessModal({
         message: 'Your primary insurance card has been successfully added into our system. Thank you!'
       });
     }
@@ -559,9 +629,10 @@
             // Show modal asking about secondary insurance
             secondaryModal.style.display = 'block';
           } else if (insuranceType === 'secondary') {
-            // Show success message for both primary and secondary
-            showSuccess({
-              message: 'Your primary and secondary insurance cards have been successfully added into our system. Thank you!'
+            // Show success modal for both primary and secondary
+            showSuccessModal({
+              message: 'Your primary and secondary insurance cards have been successfully added into our system. Thank you!',
+              link: data.link
             });
           }
           
@@ -645,6 +716,13 @@
     window.addEventListener('offline', () => {
       console.log('Network: Offline');
       showError('You appear to be offline. Please check your internet connection.');
+    });
+    
+    // Close modal when clicking outside of it
+    window.addEventListener('click', (event) => {
+      if (event.target === successModal) {
+        closeSuccessModal();
+      }
     });
     
   </script>
