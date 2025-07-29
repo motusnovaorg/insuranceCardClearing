@@ -5,3 +5,10 @@ insuranceCardImages
 credentials.json
 scan.py
 old_code
+
+# Ignore DB credentials
+game_db_credentials.json
+
+# Ignore compiled Python files
+__pycache__/
+*.pyc
