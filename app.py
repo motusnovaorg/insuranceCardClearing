@@ -29,14 +29,16 @@ def handle_upload(insurance_id):
     
     try:
         files = request.files.getlist('images')
-        print(f"DEBUG: received {len(files)} files for insurance_id: {insurance_id}")
+        insurance_type = request.form.get('insurance_type', 'primary')  # Get insurance type, default to primary
+        
+        print(f"DEBUG: received {len(files)} files for insurance_id: {insurance_id}, type: {insurance_type}")
         for f in files:
             print(f" - filename: {f.filename}")
         
         files = [f for f in files if f and f.filename]
         
         if len(files) != 2:
-            return jsonify({"error": "Please upload exactly two images (front and back of insurance card)."}), 400
+            return jsonify({"error": f"Please upload exactly two images (front and back of {insurance_type} insurance card)."}), 400
         
         allowed_extensions = {'.jpg', '.jpeg', '.png'}
         for file in files:
@@ -64,13 +66,14 @@ def handle_upload(insurance_id):
                 file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
                 print(f"Uploaded {file.filename}: {file_size_mb:.2f}MB")
             
-            # Pass insurance_id to processing function
-            s3_url = process_insurance_cards(temp_dir, insurance_id)
+            # Pass insurance_id and insurance_type to processing function
+            s3_url = process_insurance_cards(temp_dir, insurance_id, insurance_type)
             
             return jsonify({
                 "link": s3_url,
-                "message": "Insurance cards processed successfully!",
-                "insurance_id": insurance_id
+                "message": f"{insurance_type.capitalize()} insurance cards processed successfully!",
+                "insurance_id": insurance_id,
+                "insurance_type": insurance_type
             })
             
         finally:
