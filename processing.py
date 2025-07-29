@@ -41,14 +41,11 @@ def get_db_connection():
         print(f"Error connecting to database: {e}")
         raise
 
-def update_insurance_card_in_db(insurance_id, s3_url, insurance_type='primary'):
+def update_insurance_card_in_db(insurance_id, s3_url):
     """Update the insurance_fresh table and insert into insurance table with the S3 URL"""
     if not insurance_id:
         print("No insurance_id provided, skipping database update")
         return
-    
-    # Determine column name based on insurance type
-    column_name = f"{insurance_type}_insurance_card"
     
     try:
         connection = get_db_connection()
@@ -57,32 +54,32 @@ def update_insurance_card_in_db(insurance_id, s3_url, insurance_type='primary'):
         # Start transaction
         connection.autocommit = False
         
-        # 1. Update the appropriate column in insurance_fresh table
-        update_query = f"""
+        # 1. Update the primary_insurance_card column in insurance_fresh table
+        update_query = """
             UPDATE insurance_fresh 
-            SET {column_name} = %s 
+            SET primary_insurance_card = %s 
             WHERE insurance_id = %s
         """
         
         cursor.execute(update_query, (s3_url, insurance_id))
         
         if cursor.rowcount > 0:
-            print(f"Successfully updated insurance_fresh table for insurance_id {insurance_id} ({insurance_type})")
+            print(f"Successfully updated insurance_fresh table for insurance_id {insurance_id}")
         else:
             print(f"Warning: No records found in insurance_fresh for insurance_id {insurance_id}")
         
-        # 2. Insert into insurance table with the appropriate column
-        insert_query = f"""
-            INSERT INTO insurance (insurance_id, {column_name}) 
+        # 2. Insert into insurance table
+        insert_query = """
+            INSERT INTO insurance (insurance_id, primary_insurance_card) 
             VALUES (%s, %s)
         """
         
         cursor.execute(insert_query, (insurance_id, s3_url))
-        print(f"Successfully inserted/updated insurance table for insurance_id {insurance_id} ({insurance_type})")
+        print(f"Successfully inserted/updated insurance table for insurance_id {insurance_id}")
         
         # Commit both operations
         connection.commit()
-        print(f"Database operations completed successfully for insurance_id {insurance_id} with S3 URL: {s3_url} ({insurance_type})")
+        print(f"Database operations completed successfully for insurance_id {insurance_id} with S3 URL: {s3_url}")
         
         cursor.close()
         connection.close()
@@ -244,14 +241,13 @@ def convert_img_to_pdf(images_paths, output_path):
     imgs[0].save(output_path, save_all=True, append_images=imgs[1:])
     print(f"PDF created with {len(imgs)} images in correct order")
 
-def process_insurance_cards(images_folder, insurance_id=None, insurance_type='primary'):
+def process_insurance_cards(images_folder, insurance_id=None):
     """
     Process insurance card images and upload to S3, optionally update database
     
     Args:
         images_folder: Path to folder containing images
         insurance_id: Optional insurance ID for database update
-        insurance_type: Type of insurance ('primary' or 'secondary')
     
     Returns:
         str: S3 URL of uploaded PDF
@@ -299,6 +295,6 @@ def process_insurance_cards(images_folder, insurance_id=None, insurance_type='pr
     
     # Update database if insurance_id is provided
     if insurance_id:
-        update_insurance_card_in_db(insurance_id, s3_url, insurance_type)
+        update_insurance_card_in_db(insurance_id, s3_url)
     
     return s3_url
