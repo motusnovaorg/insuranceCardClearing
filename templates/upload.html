@@ -198,16 +198,10 @@
       line-height: 1.6;
       margin-bottom: 20px;
     }
-    .success-modal .modal-btn-ok {
-      background-color: #28a745;
-      color: white;
-      padding: 12px 40px;
-      font-size: 1.1rem;
-    }
     .success-modal .pdf-link {
       display: inline-block;
-      margin-top: 15px;
-      padding: 8px 20px;
+      margin: 10px 10px;
+      padding: 10px 20px;
       background-color: #007bff;
       color: white;
       text-decoration: none;
@@ -216,6 +210,13 @@
     }
     .success-modal .pdf-link:hover {
       background-color: #0056b3;
+    }
+    .success-modal .modal-btn-ok {
+      background-color: #28a745;
+      color: white;
+      padding: 12px 40px;
+      font-size: 1.1rem;
+      margin-top: 15px;
     }
 
     /* Secondary Form Styles */
@@ -356,7 +357,7 @@
       <p id="successMessage"></p>
       <div id="successPdfLink"></div>
       <div class="modal-buttons">
-        <button class="modal-btn modal-btn-ok" onclick="closeSuccessModal()">OK</button>
+        <button class="modal-btn modal-btn-ok" onclick="closeSuccessModal()">Close</button>
       </div>
     </div>
   </div>
@@ -408,6 +409,8 @@
     console.log('Insurance ID from URL:', insurance_id);
     
     let primaryUploaded = false;
+    let primaryUploadedLink = null;
+    let secondaryUploadedLink = null;
     
     // Mobile image compression function
     function compressImage(file, maxWidth = 1500, quality = 0.8) {
@@ -516,11 +519,23 @@
       
       successMessage.textContent = data.message;
       
-      if (data.link) {
-        successPdfLink.innerHTML = `<a href="${data.link}" target="_blank" class="pdf-link">View Uploaded PDF</a>`;
-      } else {
-        successPdfLink.innerHTML = '';
+      // Create buttons based on what was uploaded
+      let buttonsHtml = '';
+      
+      if (data.primaryLink) {
+        buttonsHtml += `<a href="${data.primaryLink}" target="_blank" class="pdf-link">View Primary Insurance Card Uploaded</a>`;
       }
+      
+      if (data.secondaryLink) {
+        buttonsHtml += `<a href="${data.secondaryLink}" target="_blank" class="pdf-link">View Secondary Insurance Card Uploaded</a>`;
+      }
+      
+      // Legacy support for single link (fallback)
+      if (data.link && !data.primaryLink && !data.secondaryLink) {
+        buttonsHtml += `<a href="${data.link}" target="_blank" class="pdf-link">View Uploaded PDF</a>`;
+      }
+      
+      successPdfLink.innerHTML = buttonsHtml;
       
       successModal.style.display = 'block';
       errorDiv.style.display = 'none';
@@ -544,7 +559,8 @@
     function finishPrimaryOnly() {
       secondaryModal.style.display = 'none';
       showSuccessModal({
-        message: 'Your primary insurance card has been successfully added into our system. Thank you!'
+        message: 'Your primary insurance card has been successfully added into our system. You may now close this tab. Thank you!',
+        primaryLink: primaryUploadedLink
       });
     }
     
@@ -626,13 +642,16 @@
         if (res.ok) {
           if (insuranceType === 'primary') {
             primaryUploaded = true;
+            primaryUploadedLink = data.link; // Store the primary card link
             // Show modal asking about secondary insurance
             secondaryModal.style.display = 'block';
           } else if (insuranceType === 'secondary') {
+            secondaryUploadedLink = data.link; // Store the secondary card link
             // Show success modal for both primary and secondary
             showSuccessModal({
-              message: 'Your primary and secondary insurance cards have been successfully added into our system. Thank you!',
-              link: data.link
+              message: 'Your primary and secondary insurance cards have been successfully added into our system. You may now close this tab. Thank you!',
+              primaryLink: primaryUploadedLink,
+              secondaryLink: secondaryUploadedLink
             });
           }
           
