@@ -58,7 +58,7 @@ def insert_interaction_record(s3_url, insurance_type):
         channel = "insurance_card_upload"
         timestamp = datetime.utcnow()  # Current timestamp
         length = 0
-        from_id = 419901
+        from_id = 417223
         to_id = None
         attachment = s3_url
         raw_content = insurance_type  # "primary" or "secondary"
@@ -294,8 +294,8 @@ def process_insurance_cards(images_folder, insurance_id=None, insurance_type='pr
     if not all([AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, S3_BUCKET]):
         raise ValueError("Missing AWS credentials or S3 bucket configuration")
     
-    # Validate database credentials file exists if insurance_id is provided
-    if insurance_id and not os.path.exists('game_db_credentials.json'):
+    # Always validate database credentials since we always insert interaction records
+    if not os.path.exists('game_db_credentials.json'):
         raise ValueError("game_db_credentials.json file not found")
     
     all_files = os.listdir(images_folder)
@@ -337,6 +337,11 @@ def process_insurance_cards(images_folder, insurance_id=None, insurance_type='pr
     
     # NEW FEATURE: Insert interaction record for tracking insurance card uploads
     # This will create a record for every upload (primary or secondary)
-    insert_interaction_record(s3_url, insurance_type)
+    try:
+        insert_interaction_record(s3_url, insurance_type)
+    except Exception as e:
+        print(f"Warning: Failed to insert interaction record: {e}")
+        # Don't raise the exception - we don't want to break the upload process
+        # if interaction logging fails, but we do want to log the issue
     
     return s3_url
