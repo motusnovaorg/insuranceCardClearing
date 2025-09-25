@@ -50,21 +50,20 @@ def insert_interaction_record(s3_url, insurance_type):
         
         # Insert into interaction table
         insert_query = """
-            INSERT INTO interaction (channel, timestamp, length, from_id, to_id, attachment, raw_content, removed) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO interaction (channel, timestamp, length, from_id, to_id, attachment, raw_content) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """
         
         # Prepare values according to requirements
         channel = "insurance_card_upload"
-        timestamp = datetime.now()  # Current timestamp
+        timestamp = datetime.utcnow()  # Current timestamp
         length = 0
         from_id = 419901
         to_id = None
         attachment = s3_url
         raw_content = insurance_type  # "primary" or "secondary"
-        removed = False
         
-        cursor.execute(insert_query, (channel, timestamp, length, from_id, to_id, attachment, raw_content, removed))
+        cursor.execute(insert_query, (channel, timestamp, length, from_id, to_id, attachment, raw_content))
         connection.commit()
         
         print(f"Successfully inserted interaction record for {insurance_type} insurance card upload: {s3_url}")
