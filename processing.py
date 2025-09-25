@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from PIL import Image, ExifTags
 import boto3
 import psycopg2
+from datetime import datetime
 
 load_dotenv()
 
@@ -39,6 +40,40 @@ def get_db_connection():
         return connection
     except Exception as e:
         print(f"Error connecting to database: {e}")
+        raise
+
+def insert_interaction_record(s3_url, insurance_type):
+    """Insert a record into the interaction table for insurance card upload tracking"""
+    try:
+        connection = get_db_connection()
+        cursor = connection.cursor()
+        
+        # Insert into interaction table
+        insert_query = """
+            INSERT INTO interaction (channel, timestamp, length, from_id, to_id, attachment, raw_content, removed) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        
+        # Prepare values according to requirements
+        channel = "insurance_card_upload"
+        timestamp = datetime.now()  # Current timestamp
+        length = 0
+        from_id = 419901
+        to_id = None
+        attachment = s3_url
+        raw_content = insurance_type  # "primary" or "secondary"
+        removed = False
+        
+        cursor.execute(insert_query, (channel, timestamp, length, from_id, to_id, attachment, raw_content, removed))
+        connection.commit()
+        
+        print(f"Successfully inserted interaction record for {insurance_type} insurance card upload: {s3_url}")
+        
+        cursor.close()
+        connection.close()
+        
+    except Exception as e:
+        print(f"Error inserting interaction record: {e}")
         raise
 
 def update_insurance_card_in_db(insurance_id, s3_url, insurance_type='primary'):
@@ -300,5 +335,9 @@ def process_insurance_cards(images_folder, insurance_id=None, insurance_type='pr
     # Update database if insurance_id is provided
     if insurance_id:
         update_insurance_card_in_db(insurance_id, s3_url, insurance_type)
+    
+    # NEW FEATURE: Insert interaction record for tracking insurance card uploads
+    # This will create a record for every upload (primary or secondary)
+    insert_interaction_record(s3_url, insurance_type)
     
     return s3_url
