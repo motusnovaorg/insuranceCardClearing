@@ -7,6 +7,8 @@ from PIL import Image, ExifTags
 import boto3
 import psycopg2
 from datetime import datetime
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 load_dotenv()
 
@@ -15,6 +17,10 @@ AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
 S3_BUCKET = os.getenv("S3_BUCKET")
+
+# Google Sheets Configuration
+GOOGLE_SHEETS_ID = os.getenv("GOOGLE_SHEETS_ID")  # Add this to your .env file
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # Image compression settings
 MAX_FILE_SIZE_MB = 2  # Target max file size in MB
@@ -42,17 +48,61 @@ def get_db_connection():
         print(f"Error connecting to database: {e}")
         raise
 
+def authenticate_google_services():
+    """Create and return Google Sheets service"""
+    try:
+        credentials = service_account.Credentials.from_service_account_file(
+            'credentials.json', 
+            scopes=SCOPES
+        )
+        service = build('sheets', 'v4', credentials=credentials)
+        return service
+    except Exception as e:
+        print(f"Error authenticating Google Services: {e}")
+        raise
+
+def insert_to_google_sheets(channel, timestamp, length, from_id, to_id, attachment, raw_content):
+    """Insert a record into Google Sheets"""
+    try:
+        if not GOOGLE_SHEETS_ID:
+            print("Warning: GOOGLE_SHEETS_ID not configured, skipping Google Sheets insertion")
+            return
+            
+        service = authenticate_google_services()
+        sheet = service.spreadsheets()
+        
+        # Format timestamp for Google Sheets
+        formatted_timestamp = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # Prepare the row data
+        values = [
+            [channel, formatted_timestamp, length, from_id, to_id, attachment, raw_content]
+        ]
+        
+        body = {
+            'values': values
+        }
+        
+        # Append the data to the sheet
+        result = sheet.values().append(
+            spreadsheetId=GOOGLE_SHEETS_ID,
+            range='Sheet1!A:G',  # Adjust range as needed
+            valueInputOption='RAW',
+            body=body
+        ).execute()
+        
+        print(f"Successfully inserted into Google Sheets: {result.get('updates', {}).get('updatedRows', 0)} row(s) added")
+        
+    except Exception as e:
+        print(f"Error inserting to Google Sheets: {e}")
+        # Don't raise the exception to avoid breaking the main flow
+        pass
+
 def insert_interaction_record(s3_url, insurance_type):
-    """Insert a record into the interaction table for insurance card upload tracking"""
+    """Insert a record into the interaction table for insurance card upload tracking AND Google Sheets"""
     try:
         connection = get_db_connection()
         cursor = connection.cursor()
-        
-        # Insert into interaction table
-        insert_query = """
-            INSERT INTO interaction (channel, timestamp, length, from_id, to_id, attachment, raw_content) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
         
         # Prepare values according to requirements
         channel = "insurance_card_upload"
@@ -63,6 +113,12 @@ def insert_interaction_record(s3_url, insurance_type):
         attachment = s3_url
         raw_content = insurance_type  # "primary" or "secondary"
         
+        # Insert into interaction table
+        insert_query = """
+            INSERT INTO interaction (channel, timestamp, length, from_id, to_id, attachment, raw_content) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """
+        
         cursor.execute(insert_query, (channel, timestamp, length, from_id, to_id, attachment, raw_content))
         connection.commit()
         
@@ -70,6 +126,9 @@ def insert_interaction_record(s3_url, insurance_type):
         
         cursor.close()
         connection.close()
+        
+        # Also insert into Google Sheets
+        insert_to_google_sheets(channel, timestamp, length, from_id, to_id, attachment, raw_content)
         
     except Exception as e:
         print(f"Error inserting interaction record: {e}")
